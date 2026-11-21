@@ -9,7 +9,7 @@
 # Otherwise use \x.. as stipulated in HexCode
 BYTE_START_LIST = [
     b"%PDF-",
-    b"\xff\xd8\xff\xe0",
+    b"\xff\xd8\xff",  # JFIF (E0) and EXIF (E1) JPEGs
     b"\x89\x50\x4e\x47",
     b"<!doctype html>"
 ]

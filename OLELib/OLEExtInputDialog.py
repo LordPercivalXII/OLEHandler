@@ -55,7 +55,10 @@ class OLEExtInputDialog(QDialog):
 
 def parse_attachment(ui=False, debug=False, directory: Path or str = None, file: Path or str = None, filetype: str = None, data = None):
     try:
-        filename = os.path.join(directory, file.split(".")[0] + filetype)
+        filetype = (filetype or "bin").strip()
+        if not filetype.startswith("."):
+            filetype = "." + filetype
+        filename = os.path.join(directory, os.path.splitext(file)[0] + filetype)
 
         with open(filename, "wb") as file_final:
             file_final.write(data)

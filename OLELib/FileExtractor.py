@@ -1,7 +1,9 @@
 from pathlib import Path
 import os
+import re
 import shutil
-from zipfile import ZipFile
+import tempfile
+from zipfile import ZipFile, BadZipFile
 from OLELib.OLEErrorUI import OLEErrorWindow
 from OLELib.OLEExtInputDialog import OLEExtInputWindow, parse_attachment
 from OLELib.OLEInfoUI import OLEInfoWindow
@@ -33,17 +35,16 @@ def convert_file(filepath: Path or str, saved_path: Path or str = "", debug=Fals
 
         return
 
-    # Get Path of File in TempDir
-    copied_dir = os.path.join(BASE_DIR, os.path.basename(filepath))
-
-    if debug is True:
-        print(f"[DEBUG]: {filepath} | {copied_dir}")
-
-    # Copy File to TempDir
+    # Extract into a fresh, per-run temp directory so leftovers from a previous run
+    # (e.g. an old ppt/ folder) can never be picked up again.
     try:
-        shutil.copyfile(filepath, copied_dir)
+        with tempfile.TemporaryDirectory(prefix="OLEHandler_") as temp_dir:
+            with ZipFile(filepath, "r") as zip_ext:
+                zip_ext.extractall(temp_dir)
 
-    except shutil.Error as e:
+            extract_attachments(saved_path, debug, ui, temp_dir=temp_dir)
+
+    except BadZipFile as e:
         print(f"[ERROR 1]: File Extraction error. It is likely that the file is not a ZIP file.\n\n{e}")
 
         if ui is True:
@@ -51,28 +52,28 @@ def convert_file(filepath: Path or str, saved_path: Path or str = "", debug=Fals
                                           f"\nis not a ZIP file.\n\n{e}")
             error_window.show()
 
-        return
 
-    # Formulate ZipFile name
-    # Remove existing filetype and replace with .zip
-    zip_name = os.path.basename(filepath).split(".")[0] + ".zip"
-
-    zip_path = os.path.join(BASE_DIR, zip_name)
-
-    if debug is True:
-        print(f"{copied_dir} | {zip_path}")
-
-    # Rename File to ZipFile for Extraction
-    if os.path.exists(zip_path) is False:
-        os.rename(copied_dir, zip_path)
-
-    with ZipFile(zip_path, "r") as zip_ext:
-        zip_ext.extractall(TEMP_DIR)
-
-    extract_attachments(saved_path, debug, ui)
+def _natural_key(name: str):
+    return [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", name)]
 
 
-def extract_attachments(saved_path: Path or str, debug, ui=False):
+def _locate(data: bytearray, byte_start: bytes, byte_end: bytes):
+    """
+    Return (start, end) slice bounds of the embedded file, or (-1, -1) if not found.
+    The end marker is searched with rfind so files containing the marker more than once
+    (incrementally-updated PDFs with several %%EOF, JPEGs with EXIF thumbnails) aren't cut short.
+    Matching is case-insensitive for text formats (e.g. <!DOCTYPE html>).
+    """
+    hay = bytes(data).lower() if byte_start.startswith(b"<") else data
+    start = hay.find(byte_start)
+    if start == -1:
+        return -1, -1
+    end = hay.rfind(byte_end, start)
+    end = len(data) if end == -1 else end + len(byte_end)
+    return start, end
+
+
+def extract_attachments(saved_path: Path or str, debug, ui=False, temp_dir: str = TEMP_DIR):
     ATTACHMENT_COUNT = 0
     PASSED_COUNT = 0
     FAILED_COUNT = 0
@@ -80,12 +81,13 @@ def extract_attachments(saved_path: Path or str, debug, ui=False):
 
     file_dir = None
     # Handle Undefined Saved Dir
-    if saved_path == "":
-        saved_path = TEMP_DIR
+    # (the temp dir is deleted after the run, so never save into it)
+    if not saved_path:
+        saved_path = os.getcwd()
 
     for folder in FOLDER_NAME:
-        if os.path.exists(os.path.join(TEMP_DIR, folder)):
-            file_dir = os.path.join(TEMP_DIR, folder, "embeddings")
+        if os.path.exists(os.path.join(temp_dir, folder)):
+            file_dir = os.path.join(temp_dir, folder, "embeddings")
             break
 
     if file_dir is None:
@@ -105,7 +107,8 @@ def extract_attachments(saved_path: Path or str, debug, ui=False):
         if debug is True:
             print(f"{x} | {z}")
 
-        ATTACHMENT_COUNT = len(z)
+        z = sorted(z, key=_natural_key)
+        ATTACHMENT_COUNT += len(z)
 
         for i in range(len(z)):
             # oleObject Saving Method
@@ -121,8 +124,8 @@ def extract_attachments(saved_path: Path or str, debug, ui=False):
                 # Name States
                 init_sn = f"Attachment {i + 1}." + z[i].split(".")[1]
                 p_init_sn = f"Attachment {i + 1}_Convert.oleconvert"
-                print(f"{TEMP_DIR} | {init_sn} | {p_init_sn}")
-                temp_sn = os.path.join(TEMP_DIR, init_sn)
+                print(f"{temp_dir} | {init_sn} | {p_init_sn}")
+                temp_sn = os.path.join(temp_dir, init_sn)
                 final_sn = os.path.join(saved_path, p_init_sn)
                 # tbs = os.path.join(saved_path, z[i])
 
@@ -138,22 +141,12 @@ def extract_attachments(saved_path: Path or str, debug, ui=False):
                     byte_start = BYTE_START_LIST[byte_list_count]
                     byte_end = BYTE_END_LIST[byte_list_count]
 
-                    bin_spt_1 = f_binarr_data.find(byte_start)
-                    # print(bin_spt_1)
+                    bin_spt_1, bin_spt_2 = _locate(f_binarr_data, byte_start, byte_end)
 
                     if bin_spt_1 != -1:
-                        del f_binarr_data[:bin_spt_1]
-
-                        bin_spt_2 = f_binarr_data.find(byte_end)
-
-                        if bin_spt_2 == -1:
-                            bin_spt_2 = len(f_binarr_data) - 1
-
-                        fin_bin_spt_2 = len(f_binarr_data) - (bin_spt_2 + 5)
-
-                        # print(fin_bin_spt_2)
-
-                        del f_binarr_data[-fin_bin_spt_2]
+                        # Keep exactly [start marker ... end marker] and drop the OLE wrapper around it.
+                        f_binarr_data = f_binarr_data[bin_spt_1:bin_spt_2]
+                        fin_bin_spt_2 = bin_spt_2
 
                         if debug is True:
                             print(f"BYTE LOCATION: {bin_spt_1} | {fin_bin_spt_2}")
@@ -196,6 +189,7 @@ def extract_attachments(saved_path: Path or str, debug, ui=False):
 
                         parse_attachment(ui, debug, saved_path, init_sn, user_ext, f_binarr_data)
 
+                    os.remove(temp_sn)
                     EXTRACTED = True
                     PASSED_COUNT += 1
 
@@ -237,12 +231,3 @@ def extract_attachments(saved_path: Path or str, debug, ui=False):
             text=f"Total Count: {ATTACHMENT_COUNT}\nPassed: {PASSED_COUNT}\nFailed: {FAILED_COUNT}"
         )
         ole_info.show()
-
-    for (x, y, z) in os.walk(TEMP_DIR):
-        if x == TEMP_DIR:
-            for i in y:
-                if os.path.exists(i):
-                    os.remove(os.path.join(TEMP_DIR, i))
-            for i in z:
-                if os.path.exists(i):
-                    os.remove(os.path.join(TEMP_DIR, i))

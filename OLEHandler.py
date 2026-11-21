@@ -3,6 +3,17 @@ from pathlib import Path
 from OLELib.OLEUI import run_gtui
 from OLEVersioning import __version__, __license__, __copyright__
 
+def str2bool(value) -> bool:
+    # argparse's type=bool treats any non-empty string (including "False") as True.
+    if isinstance(value, bool):
+        return value
+    if value.lower() in ("true", "t", "yes", "y", "1"):
+        return True
+    if value.lower() in ("false", "f", "no", "n", "0"):
+        return False
+    raise argparse.ArgumentTypeError(f"Expected True/False, got {value!r}")
+
+
 # ======================================================================================================================
 # CMD Argument Parser
 parser = argparse.ArgumentParser(
@@ -28,14 +39,14 @@ parser.add_argument(
     "-d", "--debug",
     help="Whether to start the script in DEBUG mode.",
     dest="debug",
-    type=bool,
+    type=str2bool,
     default=False
 )
 parser.add_argument(
     "-ui", "--ui",
     help="Run in GUI Mode. To run in CLI mode, UI flag should be set to False.",
     dest="ui",
-    type=bool,
+    type=str2bool,
     default=True  # By default, running the EXEC starts GUI
 )
 parser.add_argument(
